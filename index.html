@@ -225,6 +225,7 @@
             gap: 10px;
             font-size: 1.2em;
             flex-wrap: wrap;
+            margin-bottom: 15px;
         }
 
         .rating-value {
@@ -235,8 +236,40 @@
             font-weight: bold;
         }
 
+        .rating-source {
+            font-size: 0.8em;
+            color: #999;
+            margin-top: 5px;
+        }
+
         .stars {
             color: #ffc107;
+            font-size: 1.3em;
+        }
+
+        .book-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 15px 0;
+            font-size: 0.9em;
+        }
+
+        .info-item {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .info-label {
+            font-weight: bold;
+            color: #667eea;
+            font-size: 0.85em;
+        }
+
+        .info-value {
+            color: #333;
+            margin-top: 3px;
         }
 
         .error {
@@ -492,30 +525,46 @@
             await searchBook(isbn);
         }
 
-        // Search for book by ISBN
+        // Search for book by ISBN (Google Books + Open Library)
         async function searchBook(isbn) {
             showLoading(true, 'Searching for book...');
             hideError();
 
             try {
-                const response = await fetch(
+                // Fetch from Google Books API
+                const googleResponse = await fetch(
                     `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}&key=${API_KEY}&maxResults=1`
                 );
 
-                if (!response.ok) {
-                    throw new Error(`API Error: ${response.status}`);
+                if (!googleResponse.ok) {
+                    throw new Error(`API Error: ${googleResponse.status}`);
                 }
 
-                const data = await response.json();
+                const googleData = await googleResponse.json();
 
-                if (!data.items || data.items.length === 0) {
+                if (!googleData.items || googleData.items.length === 0) {
                     showError('❌ Book not found. Check the ISBN and try again!');
                     showLoading(false);
                     return;
                 }
 
-                const book = data.items[0].volumeInfo;
-                displayResults(book);
+                const book = googleData.items[0].volumeInfo;
+                
+                // Fetch ratings from Open Library API
+                const olResponse = await fetch(
+                    `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn)}&jscmd=data&format=json`
+                );
+                
+                let ratings = null;
+                if (olResponse.ok) {
+                    const olData = await olResponse.json();
+                    const bookKey = `ISBN:${isbn}`;
+                    if (olData[bookKey] && olData[bookKey].ratings) {
+                        ratings = olData[bookKey].ratings;
+                    }
+                }
+
+                displayResults(book, ratings);
                 showLoading(false);
 
             } catch (error) {
@@ -526,19 +575,26 @@
         }
 
         // Display search results
-        function displayResults(book) {
+        function displayResults(book, ratings) {
             const title = book.title || 'Unknown';
             const author = book.authors ? book.authors.join(', ') : 'Unknown Author';
-            const rating = book.averageRating || 'N/A';
-            const ratingsCount = book.ratingsCount || 0;
+            const pageCount = book.pageCount || 'Unknown';
+            const publishedDate = book.publishedDate || 'Unknown';
+            
+            let ratingDisplay = 'No ratings yet';
+            let starsHtml = '';
 
-            const starsHtml = rating !== 'N/A' 
-                ? `<span class="stars">${'⭐'.repeat(Math.round(rating))}</span>`
-                : '';
-
-            const ratingDisplay = rating !== 'N/A'
-                ? `${rating}/5 (${ratingsCount} reviews)`
-                : 'No ratings yet';
+            if (ratings && ratings.average) {
+                const avgRating = Math.round(ratings.average * 10) / 10;
+                const roundedRating = Math.round(avgRating);
+                starsHtml = `<span class="stars">${'⭐'.repeat(Math.min(roundedRating, 5))}</span>`;
+                ratingDisplay = `${avgRating}/5 (${ratings.count} reviews)`;
+            } else if (book.averageRating) {
+                const avgRating = Math.round(book.averageRating * 10) / 10;
+                const roundedRating = Math.round(avgRating);
+                starsHtml = `<span class="stars">${'⭐'.repeat(Math.min(roundedRating, 5))}</span>`;
+                ratingDisplay = `${avgRating}/5 (${book.ratingsCount || 0} reviews)`;
+            }
 
             const html = `
                 <div class="book-result">
@@ -547,6 +603,17 @@
                     <div class="rating">
                         <span class="rating-value">${ratingDisplay}</span>
                         ${starsHtml}
+                    </div>
+                    ${ratings ? '<div class="rating-source">📚 From Open Library</div>' : ''}
+                    <div class="book-info">
+                        <div class="info-item">
+                            <div class="info-label">📖 Pages</div>
+                            <div class="info-value">${pageCount}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">📅 Published</div>
+                            <div class="info-value">${publishedDate}</div>
+                        </div>
                     </div>
                     <p style="margin-top: 15px; color: #666; font-size: 0.95em;">
                         ${book.description ? book.description.substring(0, 200) + '...' : 'No description available'}
