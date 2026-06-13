@@ -275,24 +275,6 @@
             margin-top: 3px;
         }
 
-        .debug-info {
-            background: #f0f0f0;
-            padding: 10px;
-            border-radius: 5px;
-            margin-top: 10px;
-            font-size: 0.8em;
-            text-align: left;
-            max-height: 150px;
-            overflow-y: auto;
-            border-left: 3px solid #667eea;
-        }
-
-        .debug-label {
-            font-weight: bold;
-            color: #667eea;
-            margin-bottom: 5px;
-        }
-
         .error {
             background: #f8d7da;
             color: #721c24;
@@ -546,13 +528,13 @@
             await searchBook(isbn);
         }
 
-        // Search for book by ISBN (Google Books + Open Library)
+        // Search for book by ISBN (Google Books + Open Library with proper workflow)
         async function searchBook(isbn) {
             showLoading(true, 'Searching for book...');
             hideError();
 
             try {
-                // Fetch from Google Books API
+                // Step 1: Fetch from Google Books API for book details
                 const googleResponse = await fetch(
                     `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}&key=${API_KEY}&maxResults=1`
                 );
@@ -571,54 +553,38 @@
 
                 const book = googleData.items[0].volumeInfo;
                 
-                // Try multiple methods to fetch ratings from Open Library
+                // Step 2: Get Work ID from Open Library ISBN endpoint
                 let ratings = null;
-                let olDebug = '';
-
-                // Method 1: By ISBN
-                const olResponse1 = await fetch(
-                    `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn)}&jscmd=data&format=json`
-                );
-                
-                if (olResponse1.ok) {
-                    const olData1 = await olResponse1.json();
-                    olDebug = `OL ISBN lookup keys: ${Object.keys(olData1).join(', ')}`;
-                    
-                    for (let key in olData1) {
-                        if (olData1[key].ratings) {
-                            ratings = olData1[key].ratings;
-                            olDebug += ` | Found ratings in ${key}`;
-                            break;
-                        }
-                    }
-                }
-
-                // Method 2: By title and author (if method 1 failed)
-                if (!ratings && book.title) {
-                    const author = book.authors ? book.authors[0] : '';
-                    const query = encodeURIComponent(`${book.title} ${author}`);
-                    const olResponse2 = await fetch(
-                        `https://openlibrary.org/search.json?title=${query}&limit=1`
+                try {
+                    const isbnResponse = await fetch(
+                        `https://openlibrary.org/isbn/${encodeURIComponent(isbn)}.json`
                     );
 
-                    if (olResponse2.ok) {
-                        const olData2 = await olResponse2.json();
-                        olDebug += ` | OL Search found ${olData2.docs ? olData2.docs.length : 0} docs`;
+                    if (isbnResponse.ok) {
+                        const isbnData = await isbnResponse.json();
                         
-                        if (olData2.docs && olData2.docs.length > 0) {
-                            const doc = olData2.docs[0];
-                            if (doc.ratings_average) {
-                                ratings = {
-                                    average: doc.ratings_average,
-                                    count: doc.ratings_count || 0
-                                };
-                                olDebug += ` | Found ratings via search!`;
+                        // Extract work key from the response
+                        if (isbnData.works && isbnData.works.length > 0) {
+                            const workKey = isbnData.works[0].key; // e.g., "/works/OL82563W"
+                            
+                            // Step 3: Get ratings using the work key
+                            const ratingsResponse = await fetch(
+                                `https://openlibrary.org${workKey}/ratings.json`
+                            );
+
+                            if (ratingsResponse.ok) {
+                                const ratingsData = await ratingsResponse.json();
+                                if (ratingsData.summary) {
+                                    ratings = ratingsData.summary;
+                                }
                             }
                         }
                     }
+                } catch (olError) {
+                    console.log('Open Library lookup failed, will use Google Books ratings if available');
                 }
 
-                displayResults(book, ratings, olDebug);
+                displayResults(book, ratings);
                 showLoading(false);
 
             } catch (error) {
@@ -629,7 +595,7 @@
         }
 
         // Display search results
-        function displayResults(book, ratings, olDebug = '') {
+        function displayResults(book, ratings) {
             const title = book.title || 'Unknown';
             const author = book.authors ? book.authors.join(', ') : 'Unknown Author';
             const pageCount = book.pageCount || 'Unknown';
@@ -643,14 +609,14 @@
                 const avgRating = Math.round(ratings.average * 10) / 10;
                 const roundedRating = Math.round(avgRating);
                 starsHtml = `<span class="stars">${'⭐'.repeat(Math.min(roundedRating, 5))}</span>`;
-                ratingDisplay = `${avgRating}/5 (${ratings.count} reviews)`;
-                ratingSource = '<div class="rating-source">📚 From Open Library</div>';
+                ratingDisplay = `${avgRating}/5 (${ratings.count || 0} reviews)`;
+                ratingSource = '<div class="rating-source">📚 Ratings from Open Library</div>';
             } else if (book.averageRating) {
                 const avgRating = Math.round(book.averageRating * 10) / 10;
                 const roundedRating = Math.round(avgRating);
                 starsHtml = `<span class="stars">${'⭐'.repeat(Math.min(roundedRating, 5))}</span>`;
                 ratingDisplay = `${avgRating}/5 (${book.ratingsCount || 0} reviews)`;
-                ratingSource = '<div class="rating-source">📚 From Google Books</div>';
+                ratingSource = '<div class="rating-source">📚 Ratings from Google Books</div>';
             }
 
             const html = `
@@ -675,7 +641,6 @@
                     <p style="margin-top: 15px; color: #666; font-size: 0.95em;">
                         ${book.description ? book.description.substring(0, 200) + '...' : 'No description available'}
                     </p>
-                    ${olDebug ? `<div class="debug-info"><div class="debug-label">🔍 Debug Info:</div>${olDebug}</div>` : ''}
                 </div>
             `;
 
